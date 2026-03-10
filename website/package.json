@@ -1,0 +1,17 @@
+{
+  "name": "mcbe-ki-website",
+  "version": "1.0.0",
+  "description": "Website agent server for MCBE-KI – receives data from the Mosbach fake player and issues commands.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["minecraft", "bedrock", "agent", "websocket", "openclaw"],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.1"
+  }
+}
