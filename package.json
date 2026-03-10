@@ -17,8 +17,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.0",
     "dotenv": "^16.4.7",
-    "firebase-admin": "^13.2.0",
     "ws": "^8.18.1"
   }
 }

@@ -1,53 +1,29 @@
 'use strict';
 
-const fs = require('fs');
-const admin = require('firebase-admin');
+const { createClient } = require('@supabase/supabase-js');
 const config = require('./config');
 
-let db = null;
+let supabase = null;
 
 /**
- * Initialise the Firebase Admin SDK.
+ * Initialise the Supabase client.
  * Can be called multiple times safely; subsequent calls are no-ops.
  *
- * @returns {admin.firestore.Firestore} Firestore instance
+ * @returns {import('@supabase/supabase-js').SupabaseClient}
  */
 function init() {
-  if (db) return db;
-
-  let credential;
-
-  if (config.FIREBASE_CREDENTIALS_BASE64) {
-    const json = Buffer.from(config.FIREBASE_CREDENTIALS_BASE64, 'base64').toString('utf8');
-    const serviceAccount = JSON.parse(json);
-    credential = admin.credential.cert(serviceAccount);
-  } else if (config.FIREBASE_CREDENTIALS_PATH) {
-    const serviceAccount = JSON.parse(fs.readFileSync(config.FIREBASE_CREDENTIALS_PATH, 'utf8'));
-    credential = admin.credential.cert(serviceAccount);
-  } else {
-    // Fall back to Application Default Credentials (useful in CI / GCP)
-    credential = admin.credential.applicationDefault();
-  }
-
-  const appOptions = { credential };
-  if (config.FIREBASE_PROJECT_ID) appOptions.projectId = config.FIREBASE_PROJECT_ID;
-  if (config.FIREBASE_DATABASE_URL) appOptions.databaseURL = config.FIREBASE_DATABASE_URL;
-
-  if (!admin.apps.length) {
-    admin.initializeApp(appOptions);
-  }
-
-  db = admin.firestore();
-  return db;
+  if (supabase) return supabase;
+  supabase = createClient(config.SUPABASE_URL, config.SUPABASE_KEY);
+  return supabase;
 }
 
 /**
- * Returns the Firestore instance, initialising it on first call.
+ * Returns the Supabase client, initialising it on first call.
  *
- * @returns {admin.firestore.Firestore}
+ * @returns {import('@supabase/supabase-js').SupabaseClient}
  */
 function getDb() {
-  return db || init();
+  return supabase || init();
 }
 
 // ---------------------------------------------------------------------------
@@ -64,15 +40,16 @@ function getDb() {
  * @returns {Promise<void>}
  */
 async function saveWorldInfo(worldInfo) {
-  await getDb().collection('world').doc('info').set(
-    {
+  const { error } = await getDb()
+    .from('world_info')
+    .upsert({
+      id: 'singleton',
       seed: String(worldInfo.seed),
       version: worldInfo.version || '',
       language: worldInfo.language || '',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+      updated_at: new Date().toISOString(),
+    });
+  if (error) throw error;
 }
 
 /**
@@ -81,8 +58,13 @@ async function saveWorldInfo(worldInfo) {
  * @returns {Promise<object|null>}
  */
 async function getWorldInfo() {
-  const snap = await getDb().collection('world').doc('info').get();
-  return snap.exists ? snap.data() : null;
+  const { data, error } = await getDb()
+    .from('world_info')
+    .select('*')
+    .eq('id', 'singleton')
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,16 +80,20 @@ async function getWorldInfo() {
  * @param {number} [obj.y]
  * @param {number} obj.z
  * @param {object} [rest]   Additional type-specific fields (e.g. species, variant)
- * @returns {Promise<string>} Document ID
+ * @returns {Promise<string>} Row ID
  */
 async function saveWorldObject(obj) {
   const { type, x, y = null, z, ...rest } = obj;
-  const data = { type, x, z, ...rest };
-  if (y !== null) data.y = y;
-  data.createdAt = admin.firestore.FieldValue.serverTimestamp();
+  const row = { type, x, z, ...rest, created_at: new Date().toISOString() };
+  if (y !== null) row.y = y;
 
-  const ref = await getDb().collection('worldObjects').add(data);
-  return ref.id;
+  const { data, error } = await getDb()
+    .from('world_objects')
+    .insert(row)
+    .select('id')
+    .single();
+  if (error) throw error;
+  return String(data.id);
 }
 
 /**
@@ -117,10 +103,11 @@ async function saveWorldObject(obj) {
  * @returns {Promise<object[]>}
  */
 async function getWorldObjects(type) {
-  let query = getDb().collection('worldObjects');
-  if (type) query = query.where('type', '==', type);
-  const snap = await query.get();
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  let query = getDb().from('world_objects').select('*');
+  if (type) query = query.eq('type', type);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
 }
 
 // ---------------------------------------------------------------------------
@@ -135,18 +122,17 @@ async function getWorldObjects(type) {
  * @param {number} blockUpdate.y
  * @param {number} blockUpdate.z
  * @param {string} blockUpdate.block  Block type string, e.g. "air", "stone"
- * @returns {Promise<string>} Document ID
+ * @returns {Promise<string>} Row ID
  */
 async function saveBlockUpdate(blockUpdate) {
   const { x, y, z, block } = blockUpdate;
-  const ref = await getDb().collection('blockUpdates').add({
-    x,
-    y,
-    z,
-    block,
-    timestamp: admin.firestore.FieldValue.serverTimestamp(),
-  });
-  return ref.id;
+  const { data, error } = await getDb()
+    .from('block_updates')
+    .insert({ x, y, z, block, timestamp: new Date().toISOString() })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return String(data.id);
 }
 
 /**
@@ -155,8 +141,9 @@ async function saveBlockUpdate(blockUpdate) {
  * @returns {Promise<object[]>}
  */
 async function getBlockUpdates() {
-  const snap = await getDb().collection('blockUpdates').get();
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const { data, error } = await getDb().from('block_updates').select('*');
+  if (error) throw error;
+  return data || [];
 }
 
 // ---------------------------------------------------------------------------
@@ -171,10 +158,10 @@ async function getBlockUpdates() {
  * @returns {Promise<void>}
  */
 async function saveBotInfo(botId, info) {
-  await getDb().collection('bots').doc(botId).set(
-    { ...info, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
-    { merge: true },
-  );
+  const { error } = await getDb()
+    .from('bots')
+    .upsert({ id: botId, ...info, updated_at: new Date().toISOString() });
+  if (error) throw error;
 }
 
 /**
@@ -184,8 +171,13 @@ async function saveBotInfo(botId, info) {
  * @returns {Promise<object|null>}
  */
 async function getBotInfo(botId) {
-  const snap = await getDb().collection('bots').doc(botId).get();
-  return snap.exists ? snap.data() : null;
+  const { data, error } = await getDb()
+    .from('bots')
+    .select('*')
+    .eq('id', botId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 module.exports = {

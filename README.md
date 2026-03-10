@@ -1,7 +1,8 @@
 # MCBE-KI
 
 An AI agent that controls bots (fake players) in **Minecraft Bedrock Edition**.
-The AI runs outside the game on a server and communicates with the Minecraft modpack via a WebSocket connection.
+The AI runs on a website server and communicates with the Minecraft modpack via a
+periodic HTTP connection from the **Mosbach** addon.
 
 The AI can:
 
@@ -15,15 +16,40 @@ The AI can:
 ## System Architecture
 
 ```
-Minecraft Bot (Fake Player)
+Minecraft Bot (Fake Player) – Mosbach addon
+        ↓  POST /connect
+Website Agent Server (Express + AI logic)
         ↓
-WebSocket connection
+Supabase (PostgreSQL)
         ↓
-Agent Server (AI logic – this project)
-        ↓
-Firebase (Firestore)
-        ↓
-Response back to Minecraft
+Response (actions JSON) back to Minecraft
+```
+
+---
+
+## Repository Structure
+
+```
+MCBE-KI/
+├── src/
+│   ├── index.js      – Entry point (starts the WebSocket server)
+│   ├── server.js     – WebSocket server
+│   ├── agent.js      – AI agent (event analysis + action decisions)
+│   ├── world.js      – In-memory world model (seed + objects + block updates)
+│   ├── database.js   – Supabase integration
+│   └── config.js     – Configuration (reads .env)
+├── website/
+│   ├── server.js     – Express HTTP server exposing POST /connect
+│   └── package.json  – Website-specific dependencies
+├── Mosbach/
+│   ├── manifest.json – Minecraft Bedrock addon manifest
+│   └── scripts/
+│       └── main.js   – Script API code: fake player + HTTP polling
+├── test/
+│   ├── agent.test.js – Unit tests for the AI agent
+│   └── world.test.js – Unit tests for the world model
+├── .env.example      – Example environment variables
+└── package.json
 ```
 
 ---
@@ -37,7 +63,7 @@ Response back to Minecraft
 | **Block updates** | Records every block change vs. the original seed world |
 | **World reconstruction** | Current world = seed world + objects + block updates |
 | **Chat commands** | The bot understands natural commands from players |
-| **Firebase Firestore** | All data is persisted in Firebase |
+| **Supabase** | All data is persisted in Supabase (PostgreSQL) |
 
 ### Supported chat commands
 
@@ -52,110 +78,147 @@ Response back to Minecraft
 
 ---
 
-## Project Structure
-
-```
-MCBE-KI/
-├── src/
-│   ├── index.js      – Entry point (starts the server)
-│   ├── server.js     – WebSocket server
-│   ├── agent.js      – AI agent (event analysis + action decisions)
-│   ├── world.js      – In-memory world model (seed + objects + block updates)
-│   ├── database.js   – Firebase Firestore integration
-│   └── config.js     – Configuration (reads .env)
-├── test/
-│   ├── agent.test.js – Unit tests for the AI agent
-│   └── world.test.js – Unit tests for the world model
-├── .env.example      – Example environment variables
-└── package.json
-```
-
----
-
 ## Setup
 
 ### 1. Install dependencies
 
 ```bash
+# Agent server dependencies
 npm install
+
+# Website server dependencies
+cd website && npm install && cd ..
 ```
 
-### 2. Configure Firebase
+### 2. Configure Supabase
 
-1. Create a Firebase project at <https://console.firebase.google.com>
-2. Enable **Firestore** (Native mode)
-3. Generate a service account key: *Project Settings → Service Accounts → Generate new private key*
-4. Copy `.env.example` to `.env` and fill in your values:
+1. Create a project at <https://supabase.com>
+2. In the SQL editor run the following DDL to create the required tables:
+
+```sql
+-- World info (one row, always id = 'singleton')
+create table world_info (
+  id       text primary key,
+  seed     text,
+  version  text,
+  language text,
+  updated_at timestamptz default now()
+);
+
+-- World objects (trees, villages, ruins)
+create table world_objects (
+  id         bigint generated always as identity primary key,
+  type       text,
+  x          numeric,
+  y          numeric,
+  z          numeric,
+  species    text,
+  variant    int,
+  created_at timestamptz default now()
+);
+
+-- Block updates
+create table block_updates (
+  id        bigint generated always as identity primary key,
+  x         numeric,
+  y         numeric,
+  z         numeric,
+  block     text,
+  timestamp timestamptz default now()
+);
+
+-- Bot state
+create table bots (
+  id         text primary key,
+  health     numeric,
+  position   jsonb,
+  updated_at timestamptz default now()
+);
+```
+
+3. Copy `.env.example` to `.env` (in both the root and `website/`) and fill in your values:
 
 ```bash
 cp .env.example .env
+cp website/.env.example website/.env
 ```
 
 ```env
-# WebSocket port
+# WebSocket / agent server port (default: 8080)
 PORT=8080
 
-# Option A – base64-encoded service account JSON
-FIREBASE_CREDENTIALS_BASE64=<base64 string>
+# Supabase project URL
+SUPABASE_URL=https://<project-ref>.supabase.co
 
-# Option B – path to service account JSON file
-FIREBASE_CREDENTIALS_PATH=/path/to/serviceAccount.json
-
-# Firebase project ID
-FIREBASE_PROJECT_ID=your-project-id
+# Supabase API key (service-role recommended for server-side use)
+SUPABASE_KEY=your-supabase-key
 ```
 
-### 3. Start the server
+### 3. Start the website agent server
 
 ```bash
-npm start
+cd website && npm start
 ```
 
-The WebSocket server listens on `ws://localhost:8080` (or the configured port).
+The server listens on `http://localhost:3000` (or the configured `PORT`).
+
+### 4. Install the Mosbach addon
+
+1. Copy the `Mosbach/` folder into your Minecraft Bedrock server's `behavior_packs/` directory.
+2. Activate the pack in `world_settings.json` / the server config.
+3. Set `WEBSITE_URL` at the top of `Mosbach/scripts/main.js` to point to your website server (e.g. `http://your-server:3000`).
+4. Start the Bedrock Dedicated Server.
+
+The addon will automatically spawn a fake player, collect world events, and exchange them with the website agent every 5 seconds.
 
 ---
 
-## WebSocket Protocol
+## HTTP Protocol (website ↔ Mosbach addon)
 
-### Client → Server (Minecraft → AI)
+### Mosbach → Website  `POST /connect`
+
+Request body: a JSON **array** of event objects.
 
 ```jsonc
-// Sent once on connect
-{ "type": "world_info", "seed": "123456789", "version": "1.21", "language": "de" }
+[
+  // Sent once on first connect
+  { "type": "world_info", "seed": "123456789", "version": "1.21", "language": "de" },
 
-// Chat message from a player
-{ "type": "chat", "player": "Steve", "message": "follow me" }
+  // Chat message from a player
+  { "type": "chat", "player": "Steve", "message": "follow me" },
 
-// A block changed (e.g. player mined something)
-{ "type": "block_update", "x": 18, "y": 92, "z": -3, "block": "air" }
+  // A block changed
+  { "type": "block_update", "x": 18, "y": 92, "z": -3, "block": "air" },
 
-// A world object was discovered
-{ "type": "object", "objectType": "tree", "x": 0, "y": 64, "z": 0, "species": "oak", "variant": 7 }
-
-// Bot state update
-{ "type": "bot_info", "name": "MyBot", "health": 20, "position": { "x": 0, "y": 64, "z": 0 } }
+  // Current bot state (sent on every poll)
+  { "type": "bot_info", "name": "MosbachBot", "position": { "x": 0, "y": 64, "z": 0 } }
+]
 ```
 
-### Server → Client (AI → Minecraft)
+### Website → Mosbach  (response body)
+
+A JSON **array** of action objects.
 
 ```jsonc
-{ "action": "say",     "message": "Hello! KI agent connected." }
-{ "action": "follow",  "player": "Steve" }
-{ "action": "go_to",   "x": 10, "y": 64, "z": -30 }
-{ "action": "mine",    "x": -5, "y": 60, "z": 0 }
-{ "action": "collect", "item": "diamond" }
+[
+  { "action": "say",     "message": "Following Steve." },
+  { "action": "follow",  "player": "Steve" },
+  { "action": "go_to",   "x": 10, "y": 64, "z": -30 },
+  { "action": "mine",    "x": -5, "y": 60, "z": 0 },
+  { "action": "collect", "item": "diamond" }
+]
 ```
 
 ---
 
-## Firebase Data Structure
+## Supabase Data Structure
 
-| Collection | Document | Description |
+| Table | Key column | Description |
 |---|---|---|
-| `world/info` | single document | World seed, version, language |
-| `worldObjects` | one per object | Trees, villages, ruins |
-| `blockUpdates` | one per change | Block changes vs. seed world |
-| `bots/<botId>` | one per bot | Bot state (health, position, …) |
+| `world_info` | `id = 'singleton'` | World seed, version, language |
+| `world_objects` | auto `id` | Trees, villages, ruins |
+| `block_updates` | auto `id` | Block changes vs. seed world |
+| `bots` | `id` (bot name) | Bot state (health, position, …) |
 
 ---
 
@@ -165,5 +228,5 @@ The WebSocket server listens on `ws://localhost:8080` (or the configured port).
 npm test
 ```
 
-All tests use the Node.js built-in test runner and do **not** require a Firebase connection.
+All tests use the Node.js built-in test runner and do **not** require a Supabase connection.
 
