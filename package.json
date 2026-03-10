@@ -17,8 +17,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.0",
+    "cors": "^2.8.6",
     "dotenv": "^16.4.7",
-    "firebase-admin": "^13.2.0",
+    "express": "^5.2.1",
     "ws": "^8.18.1"
   }
 }
