@@ -1,0 +1,24 @@
+{
+  "name": "mcbe-ki",
+  "version": "1.0.0",
+  "description": "AI agent that controls bots (fake players) in Minecraft Bedrock Edition via WebSocket",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "minecraft",
+    "bedrock",
+    "ai",
+    "bot",
+    "websocket"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "firebase-admin": "^13.2.0",
+    "ws": "^8.18.1"
+  }
+}
