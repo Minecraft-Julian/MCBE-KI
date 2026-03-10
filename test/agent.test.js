@@ -165,7 +165,7 @@ describe('Agent', () => {
       assert.ok(actions.some((a) => a.action === 'say'));
     });
 
-    it('unrecognised message returns a fallback say action', async () => {
+    it('unrecognised message returns a fallback say action hinting at help', async () => {
       const { agent } = makeAgent();
       const actions = await agent.handleEvent({
         type: 'chat',
@@ -173,6 +173,7 @@ describe('Agent', () => {
         message: 'do something weird',
       });
       assert.ok(actions.some((a) => a.action === 'say'));
+      assert.ok(actions[0].message.toLowerCase().includes('help'));
     });
 
     it('is case-insensitive for commands', async () => {
@@ -183,6 +184,44 @@ describe('Agent', () => {
         message: 'Follow Me',
       });
       assert.ok(actions.some((a) => a.action === 'follow'));
+    });
+
+    it('"help" returns a say action listing available commands', async () => {
+      const { agent } = makeAgent();
+      const actions = await agent.handleEvent({ type: 'chat', player: 'Steve', message: 'help' });
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].action, 'say');
+      assert.ok(actions[0].message.includes('follow me'));
+      assert.ok(actions[0].message.includes('go to'));
+      assert.ok(actions[0].message.includes('mine'));
+      assert.ok(actions[0].message.includes('collect'));
+      assert.ok(actions[0].message.includes('find'));
+      assert.ok(actions[0].message.includes('stop'));
+    });
+
+    it('"find tree" uses bot position from bot_info when available', async () => {
+      const { agent, world } = makeAgent();
+      dbStub.saveWorldObject = async () => 'tree-id';
+      // Add two trees: one near (10,64,10) and one far (100,64,100)
+      await world.addObject({ type: 'tree', x: 100, y: 64, z: 100 });
+      await world.addObject({ type: 'tree', x: 10, y: 64, z: 10 });
+
+      // Set bot position to origin – the nearest tree should be the one at 10,64,10
+      await agent.handleEvent({ type: 'bot_info', position: { x: 0, y: 64, z: 0 } });
+
+      const actions = await agent.handleEvent({
+        type: 'chat',
+        player: 'Steve',
+        message: 'find tree',
+      });
+
+      const say = actions.find((a) => a.action === 'say');
+      assert.ok(say);
+      // Nearest tree is at x=10; message must mention 10 but NOT pick the far tree at 100
+      assert.ok(
+        say.message.includes('at 10 '),
+        `Expected nearest tree at 10 but got: ${say.message}`,
+      );
     });
   });
 
@@ -236,6 +275,28 @@ describe('Agent', () => {
       assert.equal(actions.length, 0);
       assert.equal(savedId, 'testBot');
       assert.equal(savedInfo.health, 20);
+    });
+
+    it('updates in-memory position when bot_info includes a position', async () => {
+      dbStub.saveBotInfo = async () => {};
+      const { agent } = makeAgent();
+      assert.equal(agent.position, null);
+
+      await agent.handleEvent({
+        type: 'bot_info',
+        position: { x: 10, y: 64, z: -5 },
+      });
+
+      assert.deepEqual(agent.position, { x: 10, y: 64, z: -5 });
+    });
+
+    it('does not update position when bot_info has no position field', async () => {
+      dbStub.saveBotInfo = async () => {};
+      const { agent } = makeAgent();
+
+      await agent.handleEvent({ type: 'bot_info', health: 18 });
+
+      assert.equal(agent.position, null);
     });
   });
 
